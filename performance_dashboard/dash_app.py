@@ -447,10 +447,3 @@ def Dashboard(df: pd.DataFrame, start_date: str):
 
     app.run_server(debug=True)
 
-# Suppose you have a DataFrame 'df'
-dates = pd.date_range("2021-01-01", periods=500, freq="B")
-df = pd.DataFrame(np.random.normal(0.001, 0.01, size=(500, 2)), 
-                  index=dates, columns=["Strategy_X", "Strategy_Y"])
-
-# Simply call Dashboard
-Dashboard(df, start_date = "2021-07-01")
