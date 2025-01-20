@@ -12,7 +12,7 @@ A Python package providing a Dash-based interactive dashboard to monitor strateg
 Install directly from your Git repository (replace the example URL with your own):
 
 ```bash
-pip install git+https://github.com/YourUser/performance-dashboard.git
+pip install git+https://github.com/groov0611/performance-dashboard.git
 ```
 
 

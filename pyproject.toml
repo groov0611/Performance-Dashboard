@@ -7,7 +7,7 @@ name = "performance-dashboard"
 version = "0.1.0"
 description = "A Dash app for performance monitoring."
 authors = [
-    { name="Groov0611"}
+    { name="groov0611"}
 ]
 license = "MIT"
 
@@ -49,4 +49,4 @@ dependencies = [
 ]
 
 [project.urls]
-"Source" = "https://github.com/Groov0611/performance-dashboard"
+"Source" = "https://github.com/groov0611/performance-dashboard"
