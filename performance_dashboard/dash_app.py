@@ -58,7 +58,7 @@ def Dashboard(df: pd.DataFrame, start_date: str = None):
 
     def hit_rate(returns_series: pd.Series) -> float:
         """Fraction of days with returns >= 0 (counting zero as positive)."""
-        return (returns_series >= 0).mean()
+        return (returns_series[returns_series!=0] >= 0).mean()
 
     def period_performance(returns_series: pd.Series) -> float:
         """(1 + r_1)*(1 + r_2)*...*(1 + r_n) - 1 over the given period."""
@@ -137,7 +137,7 @@ def Dashboard(df: pd.DataFrame, start_date: str = None):
             row_data["Sharpe"] = f"{annualized_sharpe_ratio(full_series):.2f}"
             row_data["Sortino"] = f"{annualized_sortino_ratio(full_series):.2f}"
             row_data["Max DD"] = f"{max_drawdown(full_series)*100:.2f}%"
-            row_data["Avg Daily Return"] = f"{average_daily_return(full_series)*100:.4f}%"
+            row_data["Avg Daily Return"] = f"{average_daily_return(full_series)*100:.2f}%"
             row_data["Hit Rate"] = f"{hit_rate(full_series)*100:.2f}%"
             
             table_rows.append(row_data)
@@ -197,6 +197,7 @@ def Dashboard(df: pd.DataFrame, start_date: str = None):
         # --------------------------
         html.Div([
             html.H3("Performance Table"),
+            html.Div(id="date-range-label", style={"margin-bottom": "10px"}),
             dash_table.DataTable(
                 id='performance-table',
                 columns=[
@@ -247,7 +248,8 @@ def Dashboard(df: pd.DataFrame, start_date: str = None):
         [
             Output('cumulative-returns-plot', 'figure'),
             Output('underwater-plot', 'figure'),
-            Output('performance-table', 'data')
+            Output('performance-table', 'data'),
+            Output('date-range-label', 'children')  # new output
         ],
         [
             Input('date-picker-range', 'start_date'),
@@ -277,7 +279,8 @@ def Dashboard(df: pd.DataFrame, start_date: str = None):
 
         if df_filtered.empty:
             empty_fig = go.Figure(data=[])
-            return empty_fig, empty_fig, []
+            return empty_fig, empty_fig, [], f"Start: {start_date.date()}, End: {end_date.date()} (No Data)"
+
 
         # 1) Cumulative Returns (multi-line)
         cum_returns_fig = go.Figure()
@@ -292,7 +295,7 @@ def Dashboard(df: pd.DataFrame, start_date: str = None):
             ))
         cum_returns_fig.update_layout(
             title="Cumulative Returns",
-            xaxis_title="Date",
+            xaxis_title=None,
             yaxis_title="Cumulative Return",
             yaxis_tickformat=".2%",
             hovermode='x unified'
@@ -312,7 +315,7 @@ def Dashboard(df: pd.DataFrame, start_date: str = None):
             ))
         underwater_fig.update_layout(
             title="Underwater Plot (Drawdown)",
-            xaxis_title="Date",
+            xaxis_title=None,
             yaxis_title="Drawdown",
             yaxis_tickformat=".2%",
             hovermode='x unified'
@@ -320,8 +323,9 @@ def Dashboard(df: pd.DataFrame, start_date: str = None):
 
         # 3) Performance Table
         table_data = compute_performance_table(df_filtered, start_date, end_date)
+        date_text = f"Start: {start_date.date()}  |  End: {end_date.date()}"
 
-        return cum_returns_fig, underwater_fig, table_data
+        return cum_returns_fig, underwater_fig, table_data, date_text
 
     # ------------------------------------------------------------------------------
     # CALLBACK: HEATMAPS (MONTHLY & WEEKLY)
@@ -353,7 +357,7 @@ def Dashboard(df: pd.DataFrame, start_date: str = None):
         rows_m = len(selected_heatmap_strategies)
         fig_monthly = make_subplots(
             rows=rows_m, cols=1,
-            subplot_titles=[f"{s} - Monthly Returns" for s in selected_heatmap_strategies],
+            subplot_titles=[f"{s}" for s in selected_heatmap_strategies],
             vertical_spacing=0.1
         )
 
@@ -386,9 +390,9 @@ def Dashboard(df: pd.DataFrame, start_date: str = None):
             # We'll create a heatmap
             heatmap = go.Heatmap(
                 x=pivot.columns,
-                y=pivot.index,
+                y=[str(y) for y in pivot.index],
                 z=pivot.values ,
-                colorscale='rdylgn',
+                coloraxis="coloraxis",
                 hovertemplate="Year=%{y}<br>Month=%{x}<br>Return=%{z:.2%}<extra></extra>",
                 texttemplate="%{z:.1%}",
                 showscale=False
@@ -402,25 +406,34 @@ def Dashboard(df: pd.DataFrame, start_date: str = None):
                 tickmode='array',
                 tickvals=list(range(1,13)),
                 ticktext=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"],
-                title_text="Month",
+                title_text=None,
                 row=i+1, col=1,
+                
                 
             )
             fig_monthly.update_yaxes(title_text="Year", row=i+1, col=1)
 
         fig_monthly.update_layout(
+            coloraxis=dict(
+            colorscale='RdYlGn',
+            cmin=-0.1,
+            cmax=0.1,
+            cmid=0,
+            showscale=False
+        ),
             height=300*rows_m,  # scale figure height by number of subplots
-            title="Monthly Returns Heatmap(s)"
+            title="Monthly Returns"
         )
 
         # ---------- WEEKLY HEATMAP -----------
         # Resample to weekly returns
         # We'll say 'W-MON' means each period ends on Monday
         weekly_returns = (1 + df[(df.index >= start_date) & (df.index <= end_date)]).resample('W-MON').prod() - 1
+        weekly_returns.index = weekly_returns.index + pd.offsets.Day(6)
         rows_w = len(selected_heatmap_strategies)
         fig_weekly = make_subplots(
             rows=rows_w, cols=1,
-            subplot_titles=[f"{s} - Weekly Returns" for s in selected_heatmap_strategies],
+            subplot_titles=[f"{s}" for s in selected_heatmap_strategies],
             vertical_spacing=0.1
         )
 
@@ -433,6 +446,9 @@ def Dashboard(df: pd.DataFrame, start_date: str = None):
             # isocalendar().week gives the ISO week number
             strat_weekly['Year'] = strat_weekly.index.year
             strat_weekly['Week'] = strat_weekly.index.isocalendar().week
+           
+
+            print(strat)
 
             # Pivot: rows=Year, cols=Week
             pivot = strat_weekly.pivot(index='Year', columns='Week', values=strat)
@@ -453,21 +469,28 @@ def Dashboard(df: pd.DataFrame, start_date: str = None):
 
             heatmap = go.Heatmap(
                 x=pivot.columns,   # weeks of the year
-                y=pivot.index,     # year
+                y=[str(y) for y in pivot.index],     # year
                 z=pivot.values,
-                colorscale='rdylgn',
+                coloraxis="coloraxis",
                 hovertemplate="Year=%{y}<br>Week=%{x}<br>Return=%{z:.2%}<extra></extra>",
                 texttemplate="%{z:.1%}",
                 showscale=False
             )
             fig_weekly.add_trace(heatmap, row=i+1, col=1)
 
-            fig_weekly.update_xaxes(title_text="Week #", row=i+1, col=1)
+            fig_weekly.update_xaxes(title_text=None, row=i+1, col=1)
             fig_weekly.update_yaxes(title_text="Year", row=i+1, col=1)
 
         fig_weekly.update_layout(
+            coloraxis=dict(
+            colorscale='RdYlGn',
+            cmin=-0.1,
+            cmax=0.1,
+            cmid=0,
+            showscale=False
+        ),
             height=300*rows_w,
-            title="Weekly Returns Heatmap(s)"
+            title="Weekly Returns"
         )
 
         return fig_monthly, fig_weekly
@@ -475,3 +498,13 @@ def Dashboard(df: pd.DataFrame, start_date: str = None):
 
     app.run_server(debug=True)
 
+# Example: synthetic returns DataFrame
+dates = pd.date_range("2024-10-01", periods=100, freq="B")
+df = pd.DataFrame(
+    np.random.normal(0.001, 0.01, size=(100, 2)),
+    index=dates,
+    columns=["Strategy_X", "Strategy_Y"]
+)
+
+# Launch the Dash app
+Dashboard(df)  # By default, runs on http://127.0.0.1:8050
