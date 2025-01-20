@@ -9,15 +9,18 @@ import datetime as dt
 
 
 
-def Dashboard(df: pd.DataFrame, start_date: str):
+def Dashboard(df: pd.DataFrame, start_date: str = None):
     """
     Launch the Dash performance dashboard given a returns DataFrame.
     
     :param df: Pandas DataFrame of daily returns (index=dates, columns=strategies).
     :param port: Optional port to run the server on (defaults to 8050).
     """
-
-    start_date = pd.Timestamp(start_date)
+    if start_date is None:
+        start_date = df.index.min()
+    
+    else:
+        start_date = pd.Timestamp(start_date)
 
     def compute_cumulative_returns(returns_series: pd.Series) -> pd.Series:
         """Compute the cumulative returns over time."""
@@ -367,6 +370,18 @@ def Dashboard(df: pd.DataFrame, start_date: str):
             # Pivot: rows=Year, cols=Month, values=returns
             pivot = strat_monthly.pivot(index='Year', columns='Month', values=strat)
             pivot = pivot.sort_index(ascending=False)  # so most recent year at top (optional)
+            # 1) Figure out the *full* year range present in your data
+            all_years = range(pivot.index.min(), pivot.index.max() + 1)
+
+            # 2) Weeks from 1..52 (or 1..53 if you want to include all possible ISO weeks)
+            all_months = range(1, 13)
+
+            # 3) Reindex pivot
+            pivot = pivot.reindex(
+                index=all_years,    # ensures each year row is present
+                columns=all_months,  # ensures each week column is present
+                fill_value=np.nan
+            )
 
             # We'll create a heatmap
             heatmap = go.Heatmap(
@@ -422,6 +437,19 @@ def Dashboard(df: pd.DataFrame, start_date: str):
             # Pivot: rows=Year, cols=Week
             pivot = strat_weekly.pivot(index='Year', columns='Week', values=strat)
             pivot = pivot.sort_index(ascending=False)  # so the latest year is on top
+
+                        # 1) Figure out the *full* year range present in your data
+            all_years = range(pivot.index.min(), pivot.index.max() + 1)
+
+            # 2) Weeks from 1..52 (or 1..53 if you want to include all possible ISO weeks)
+            all_weeks = range(1, 53)
+
+            # 3) Reindex pivot
+            pivot = pivot.reindex(
+                index=all_years,    # ensures each year row is present
+                columns=all_weeks,  # ensures each week column is present
+                fill_value=np.nan
+            )
 
             heatmap = go.Heatmap(
                 x=pivot.columns,   # weeks of the year
