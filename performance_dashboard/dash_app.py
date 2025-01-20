@@ -498,13 +498,13 @@ def Dashboard(df: pd.DataFrame, start_date: str = None):
 
     app.run_server(debug=True)
 
-# Example: synthetic returns DataFrame
-dates = pd.date_range("2024-10-01", periods=100, freq="B")
-df = pd.DataFrame(
-    np.random.normal(0.001, 0.01, size=(100, 2)),
-    index=dates,
-    columns=["Strategy_X", "Strategy_Y"]
-)
+# # Example: synthetic returns DataFrame
+# dates = pd.date_range("2024-10-01", periods=100, freq="B")
+# df = pd.DataFrame(
+#     np.random.normal(0.001, 0.01, size=(100, 2)),
+#     index=dates,
+#     columns=["Strategy_X", "Strategy_Y"]
+# )
 
-# Launch the Dash app
-Dashboard(df)  # By default, runs on http://127.0.0.1:8050
+# # Launch the Dash app
+# Dashboard(df)  # By default, runs on http://127.0.0.1:8050
