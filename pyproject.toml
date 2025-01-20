@@ -9,7 +9,8 @@ description = "A Dash app for performance monitoring."
 authors = [
     { name="groov0611"}
 ]
-license-expression = "MIT"
+
+license = { file = "LICENSE" }
 
 # Add your required dependencies here:
 dependencies = [
