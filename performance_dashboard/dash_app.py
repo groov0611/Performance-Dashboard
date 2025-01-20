@@ -9,13 +9,15 @@ import datetime as dt
 
 
 
-def Dashboard(df: pd.DataFrame):
+def Dashboard(df: pd.DataFrame, start_date: str):
     """
     Launch the Dash performance dashboard given a returns DataFrame.
     
     :param df: Pandas DataFrame of daily returns (index=dates, columns=strategies).
     :param port: Optional port to run the server on (defaults to 8050).
     """
+
+    start_date = pd.Timestamp(start_date)
 
     def compute_cumulative_returns(returns_series: pd.Series) -> pd.Series:
         """Compute the cumulative returns over time."""
@@ -62,7 +64,7 @@ def Dashboard(df: pd.DataFrame):
         return (1 + returns_series).prod() - 1
 
     # -- For sub-period slicing in the performance table --
-    def get_period_slice(df: pd.DataFrame, period: str, end_date: pd.Timestamp):
+    def get_period_slice(df: pd.DataFrame, period: str, start_date: pd.Timestamp, end_date: pd.Timestamp):
         """
         Helper to slice the (already date-filtered) DataFrame for WTD, MTD, YTD, etc.
         We'll interpret 'today' as 'end_date'.
@@ -70,7 +72,7 @@ def Dashboard(df: pd.DataFrame):
         if df.empty:
             return df
         
-        valid_dates = df.index[df.index <= end_date]
+        valid_dates = df.index[(df.index <= end_date) & (df.index >= start_date)]
         if len(valid_dates) == 0:
             return df.iloc[0:0]  # empty
         actual_end_date = valid_dates[-1]
@@ -79,7 +81,7 @@ def Dashboard(df: pd.DataFrame):
         start_of_week = actual_end_date - pd.to_timedelta(actual_end_date.weekday(), unit='D')
         start_of_month = pd.to_datetime(f"{actual_end_date.year}-{actual_end_date.month:02d}-01")
         start_of_year = pd.to_datetime(f"{actual_end_date.year}-01-01")
-        global_start = df.index.min()
+        global_start = valid_dates.min()
 
         if period == "WTD":
             start = max(global_start, start_of_week)
@@ -106,7 +108,7 @@ def Dashboard(df: pd.DataFrame):
 
         return df.loc[(df.index >= start) & (df.index <= actual_end_date)]
 
-    def compute_performance_table(df: pd.DataFrame, end_date: pd.Timestamp):
+    def compute_performance_table(df: pd.DataFrame, start_date: pd.Timestamp, end_date: pd.Timestamp):
         """
         For each strategy (column in df), compute:
         - WTD, MTD, YTD, Since Inception,
@@ -123,7 +125,7 @@ def Dashboard(df: pd.DataFrame):
         for strategy in df.columns:
             row_data = {"Strategy": strategy}
             for p in periods:
-                sliced = get_period_slice(df[[strategy]], p, end_date)
+                sliced = get_period_slice(df[[strategy]], p, start_date,  end_date)
                 ret = period_performance(sliced[strategy])
                 row_data[p] = f"{ret*100:.2f}%"
 
@@ -155,7 +157,7 @@ def Dashboard(df: pd.DataFrame):
             html.Label("Select Date Range:"),
             dcc.DatePickerRange(
                 id='date-picker-range',
-                start_date=df.index[0],
+                start_date = start_date,
                 end_date=df.index[-1],
                 display_format='YYYY-MM-DD'
             )
@@ -314,7 +316,7 @@ def Dashboard(df: pd.DataFrame):
         )
 
         # 3) Performance Table
-        table_data = compute_performance_table(df_filtered, end_date)
+        table_data = compute_performance_table(df_filtered, start_date, end_date)
 
         return cum_returns_fig, underwater_fig, table_data
 
@@ -326,9 +328,11 @@ def Dashboard(df: pd.DataFrame):
             Output('monthly-heatmap', 'figure'),
             Output('weekly-heatmap', 'figure')
         ],
-        [Input('heatmap-strategy-dropdown', 'value')]
+        [Input('heatmap-strategy-dropdown', 'value'),
+        Input('date-picker-range', 'start_date'),
+        Input('date-picker-range', 'end_date')]
     )
-    def update_heatmaps(selected_heatmap_strategies):
+    def update_heatmaps(selected_heatmap_strategies, start_date, end_date):
         """
         Creates:
         - A multi-subplot monthly heatmap
@@ -341,7 +345,7 @@ def Dashboard(df: pd.DataFrame):
 
         # ---------- MONTHLY HEATMAP -----------
         # Resample to monthly returns
-        monthly_returns = (1 + df).resample('M').prod() - 1
+        monthly_returns = (1 + df[(df.index >= start_date) & (df.index <= end_date)]).resample('M').prod() - 1
         # We'll create a separate subplot for each strategy
         rows_m = len(selected_heatmap_strategies)
         fig_monthly = make_subplots(
@@ -397,7 +401,7 @@ def Dashboard(df: pd.DataFrame):
         # ---------- WEEKLY HEATMAP -----------
         # Resample to weekly returns
         # We'll say 'W-MON' means each period ends on Monday
-        weekly_returns = (1 + df).resample('W-MON').prod() - 1
+        weekly_returns = (1 + df[(df.index >= start_date) & (df.index <= end_date)]).resample('W-MON').prod() - 1
         rows_w = len(selected_heatmap_strategies)
         fig_weekly = make_subplots(
             rows=rows_w, cols=1,
@@ -443,4 +447,10 @@ def Dashboard(df: pd.DataFrame):
 
     app.run_server(debug=True)
 
+# Suppose you have a DataFrame 'df'
+dates = pd.date_range("2021-01-01", periods=500, freq="B")
+df = pd.DataFrame(np.random.normal(0.001, 0.01, size=(500, 2)), 
+                  index=dates, columns=["Strategy_X", "Strategy_Y"])
 
+# Simply call Dashboard
+Dashboard(df, start_date = "2021-07-01")
