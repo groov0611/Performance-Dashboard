@@ -43,7 +43,7 @@ def max_drawdown(returns_series: pd.Series) -> float:
     """Compute the maximum drawdown from a daily returns series."""
     cum = (1 + returns_series).cumprod()
     dd = compute_drawdown(cum)
-    return dd.max()
+    return dd.min()
 
 def average_daily_return(returns_series: pd.Series) -> float:
     """Average daily return."""
