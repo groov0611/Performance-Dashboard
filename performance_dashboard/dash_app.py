@@ -1,262 +1,380 @@
 import dash
 from dash import dcc, html, dash_table
 from dash.dependencies import Input, Output
+from dash_table.Format import Format, Scheme
 import plotly.graph_objs as go
-from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
-import datetime as dt
 
 
 
-def Dashboard(df: pd.DataFrame, start_date: str = None):
+month_names = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",
+               7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
+
+periods_columns = ["WTD", "MTD", "YTD", "ITD", "1M", "3M", "6M", "1Y"]
+# ------------------------------------------------------------------------------
+# HELPER FUNCTIONS
+# ------------------------------------------------------------------------------
+def compute_cumulative_returns(returns_series: pd.Series) -> pd.Series:
+    """Compute the cumulative returns over time."""
+    return (1 + returns_series).cumprod() - 1
+
+def compute_drawdown(cum_returns: pd.Series) -> pd.Series:
+    """Compute drawdown from cumulative returns."""
+    running_max = cum_returns.cummax()
+    return (cum_returns / running_max) - 1
+
+def annualized_sharpe_ratio(returns_series: pd.Series, freq=252) -> float:
+    """Annualized Sharpe Ratio."""
+    std = returns_series.std()
+    if std == 0:
+        return 0
+    return (returns_series.mean() / std) * np.sqrt(freq)
+
+def annualized_sortino_ratio(returns_series: pd.Series, freq=252) -> float:
+    """Annualized Sortino Ratio."""
+    negative_returns = returns_series[returns_series < 0]
+    neg_std = negative_returns.std()
+    if neg_std == 0:
+        return 0
+    return (returns_series.mean() / neg_std) * np.sqrt(freq)
+
+def max_drawdown(returns_series: pd.Series) -> float:
+    """Compute the maximum drawdown from a daily returns series."""
+    cum = (1 + returns_series).cumprod()
+    dd = compute_drawdown(cum)
+    return dd.max()
+
+def average_daily_return(returns_series: pd.Series) -> float:
+    """Average daily return."""
+    return returns_series.mean()
+
+def hit_rate(returns_series: pd.Series) -> float:
+    """Fraction of days with returns >= 0 (counting zero as positive)."""
+    return (returns_series >= 0).mean()
+
+def period_performance(returns_series: pd.Series) -> float:
+    """(1 + r_1)*(1 + r_2)*...*(1 + r_n) - 1 over the given period."""
+    if len(returns_series) == 0:
+        return 0
+    return (1 + returns_series).prod() - 1
+
+# -- For sub-period slicing in the performance table --
+def get_period_slice(df: pd.DataFrame, period: str, start_date: pd.Timestamp, end_date: pd.Timestamp):
     """
-    Launch the Dash performance dashboard given a returns DataFrame.
-    
-    :param df: Pandas DataFrame of daily returns (index=dates, columns=strategies).
-    :param port: Optional port to run the server on (defaults to 8050).
+    Helper to slice the (already date-filtered) DataFrame for WTD, MTD, YTD, etc.
+    We'll interpret 'today' as 'end_date'.
     """
-    if start_date is None:
-        start_date = df.index.min()
+    if df.empty:
+        return df
     
+    valid_dates = df.index[(df.index <= end_date) & (df.index >= start_date)]
+    if len(valid_dates) == 0:
+        return df.iloc[0:0]  # empty
+    actual_end_date = valid_dates[-1]
+
+    # Start-of definitions
+    start_of_week = actual_end_date - pd.to_timedelta(actual_end_date.weekday(), unit='D')
+    start_of_month = pd.to_datetime(f"{actual_end_date.year}-{actual_end_date.month:02d}-01")
+    start_of_year = pd.to_datetime(f"{actual_end_date.year}-01-01")
+    global_start = valid_dates.min()
+
+    if period == "WTD":
+        start = max(global_start, start_of_week)
+    elif period == "MTD":
+        start = max(global_start, start_of_month)
+    elif period == "YTD":
+        start = max(global_start, start_of_year)
+    elif period == "ITD":
+        start = global_start
+    elif period == "1M":  # last ~21 trading days
+        idx = df.loc[:actual_end_date].index
+        start_idx = max(0, len(idx) - 21)
+        start = idx[start_idx] if len(idx) > 0 else actual_end_date
+    elif period == "3M":  # last ~63 trading days
+        idx = df.loc[:actual_end_date].index
+        start_idx = max(0, len(idx) - 63)
+        start = idx[start_idx] if len(idx) > 0 else actual_end_date
+    elif period == "6M":  # last ~126 trading days
+        idx = df.loc[:actual_end_date].index
+        start_idx = max(0, len(idx) - 126)
+        start = idx[start_idx] if len(idx) > 0 else actual_end_date
+    elif period == "1Y":  # last ~126 trading days
+        idx = df.loc[:actual_end_date].index
+        start_idx = max(0, len(idx) - 252)
+        start = idx[start_idx] if len(idx) > 0 else actual_end_date
     else:
-        start_date = pd.Timestamp(start_date)
+        start = global_start
 
-    def compute_cumulative_returns(returns_series: pd.Series) -> pd.Series:
-        """Compute the cumulative returns over time."""
-        return (1 + returns_series).cumprod() - 1
+    return df.loc[(df.index >= start) & (df.index <= actual_end_date)]
 
-    def compute_drawdown(cum_returns: pd.Series) -> pd.Series:
-        """Compute drawdown from cumulative returns."""
-        running_max = cum_returns.cummax()
-        return (cum_returns / running_max) - 1
+def compute_performance_table(df: pd.DataFrame,start_date: pd.Timestamp,  end_date: pd.Timestamp):
+    """
+    For each strategy (column in df), compute:
+    - WTD, MTD, YTD, Since Inception,
+    - 1M, 3M, 6M, 1Y
+    - Sharpe, Sortino, MaxDD, AvgDaily, HitRate,
+    all restricted to the filtered data [start_date, end_date].
+    """
+    if df.empty:
+        return []
 
-    def annualized_sharpe_ratio(returns_series: pd.Series, freq=252) -> float:
-        """Annualized Sharpe Ratio."""
-        std = returns_series.std()
-        if std == 0:
-            return 0
-        return (returns_series.mean() / std) * np.sqrt(freq)
+    table_rows = []
+    
+    for strategy in df.columns:
+        row_data = {"Strategy": strategy}
+        for p in periods_columns:
+            sliced = get_period_slice(df[[strategy]], p, start_date,  end_date)
+            ret = period_performance(sliced[strategy])
+            row_data[p] = f"{ret*100:.2f}%"
 
-    def annualized_sortino_ratio(returns_series: pd.Series, freq=252) -> float:
-        """Annualized Sortino Ratio."""
-        negative_returns = returns_series[returns_series < 0]
-        neg_std = negative_returns.std()
-        if neg_std == 0:
-            return 0
-        return (returns_series.mean() / neg_std) * np.sqrt(freq)
-
-    def max_drawdown(returns_series: pd.Series) -> float:
-        """Compute the maximum drawdown from a daily returns series."""
-        cum = (1 + returns_series).cumprod()
-        dd = compute_drawdown(cum)
-        return dd.min()
-
-    def average_daily_return(returns_series: pd.Series) -> float:
-        """Average daily return."""
-        return returns_series.mean()
-
-    def hit_rate(returns_series: pd.Series) -> float:
-        """Fraction of days with returns >= 0 (counting zero as positive)."""
-        return (returns_series[returns_series!=0] >= 0).mean()
-
-    def period_performance(returns_series: pd.Series) -> float:
-        """(1 + r_1)*(1 + r_2)*...*(1 + r_n) - 1 over the given period."""
-        if len(returns_series) == 0:
-            return 0
-        return (1 + returns_series).prod() - 1
-
-    # -- For sub-period slicing in the performance table --
-    def get_period_slice(df: pd.DataFrame, period: str, start_date: pd.Timestamp, end_date: pd.Timestamp):
-        """
-        Helper to slice the (already date-filtered) DataFrame for WTD, MTD, YTD, etc.
-        We'll interpret 'today' as 'end_date'.
-        """
-        if df.empty:
-            return df
+        # Full series within the chosen date window
+        full_series = df[strategy].dropna()
+        row_data["Sharpe"] = f"{annualized_sharpe_ratio(full_series):.2f}"
+        row_data["Sortino"] = f"{annualized_sortino_ratio(full_series):.2f}"
+        row_data["Max DD"] = f"{max_drawdown(full_series)*100:.2f}%"
+        row_data["Avg Daily Return"] = f"{average_daily_return(full_series)*100:.4f}%"
+        row_data["Hit Rate"] = f"{hit_rate(full_series)*100:.2f}%"
         
-        valid_dates = df.index[(df.index <= end_date) & (df.index >= start_date)]
-        if len(valid_dates) == 0:
-            return df.iloc[0:0]  # empty
-        actual_end_date = valid_dates[-1]
-
-        # Start-of definitions
-        start_of_week = actual_end_date - pd.to_timedelta(actual_end_date.weekday(), unit='D')
-        start_of_month = pd.to_datetime(f"{actual_end_date.year}-{actual_end_date.month:02d}-01")
-        start_of_year = pd.to_datetime(f"{actual_end_date.year}-01-01")
-        global_start = valid_dates.min()
-
-        if period == "WTD":
-            start = max(global_start, start_of_week)
-        elif period == "MTD":
-            start = max(global_start, start_of_month)
-        elif period == "YTD":
-            start = max(global_start, start_of_year)
-        elif period == "SINCE INCEPTION":
-            start = global_start
-        elif period == "1M":  # last ~21 trading days
-            idx = df.loc[:actual_end_date].index
-            start_idx = max(0, len(idx) - 21)
-            start = idx[start_idx] if len(idx) > 0 else actual_end_date
-        elif period == "3M":  # last ~63 trading days
-            idx = df.loc[:actual_end_date].index
-            start_idx = max(0, len(idx) - 63)
-            start = idx[start_idx] if len(idx) > 0 else actual_end_date
-        elif period == "6M":  # last ~126 trading days
-            idx = df.loc[:actual_end_date].index
-            start_idx = max(0, len(idx) - 126)
-            start = idx[start_idx] if len(idx) > 0 else actual_end_date
-        else:
-            start = global_start
-
-        return df.loc[(df.index >= start) & (df.index <= actual_end_date)]
-
-    def compute_performance_table(df: pd.DataFrame, start_date: pd.Timestamp, end_date: pd.Timestamp):
-        """
-        For each strategy (column in df), compute:
-        - WTD, MTD, YTD, Since Inception,
-        - 1M, 3M, 6M,
-        - Sharpe, Sortino, MaxDD, AvgDaily, HitRate,
-        all restricted to the filtered data [start_date, end_date].
-        """
-        if df.empty:
-            return []
-
-        periods = ["WTD", "MTD", "YTD", "SINCE INCEPTION", "1M", "3M", "6M"]
-        table_rows = []
-        
-        for strategy in df.columns:
-            row_data = {"Strategy": strategy}
-            for p in periods:
-                sliced = get_period_slice(df[[strategy]], p, start_date,  end_date)
-                ret = period_performance(sliced[strategy])
-                row_data[p] = f"{ret*100:.2f}%"
-
-            # Full series within the chosen date window
-            full_series = df[strategy].dropna()
-            row_data["Sharpe"] = f"{annualized_sharpe_ratio(full_series):.2f}"
-            row_data["Sortino"] = f"{annualized_sortino_ratio(full_series):.2f}"
-            row_data["Max DD"] = f"{max_drawdown(full_series)*100:.2f}%"
-            row_data["Avg Daily Return"] = f"{average_daily_return(full_series)*100:.2f}%"
-            row_data["Hit Rate"] = f"{hit_rate(full_series)*100:.2f}%"
-            
-            table_rows.append(row_data)
-        
-        return table_rows
+        table_rows.append(row_data)
+    
+    return table_rows
 
 
-    # ------------------------------------------------------------------------------
-    # DASH APP
-    # ------------------------------------------------------------------------------
+
+
+def Dashboard(df, start_date : str = None, end_date: str = None, plot_columns = None, table_columns = None):
+    if plot_columns is None:
+        plot_columns = df.columns
+    if table_columns is None:
+        table_columns = df.columns
+    if end_date is None:
+        end_date = pd.Timestamp(df.index[-1])
+    if start_date is None:
+        start_date = pd.Timestamp(df.index[0])
+
     app = dash.Dash(__name__)
 
     app.layout = html.Div([
         html.H2("Strategy Performance Dashboard"),
 
-        # --------------------------
-        # Date Range + Strategy selection FOR LINE PLOTS & TABLE
-        # --------------------------
+        # Date Range Picker
         html.Div([
             html.Label("Select Date Range:"),
             dcc.DatePickerRange(
                 id='date-picker-range',
-                start_date = start_date,
-                end_date=df.index[-1],
+                start_date=df.index.min().date(),
+                end_date=df.index.max().date(),
                 display_format='YYYY-MM-DD'
             )
         ], style={'margin-bottom': '20px'}),
 
+        # Dropdown for line plots and performance table strategies
         html.Div([
             html.Label("Select Strategies (Line Plots & Table):"),
             dcc.Dropdown(
                 id='strategy-dropdown',
                 options=[{'label': s, 'value': s} for s in df.columns],
-                value=list(df.columns),  # default: all
+                value=list(plot_columns),
                 multi=True
             )
         ], style={'width': '400px', 'margin-bottom': '20px'}),
 
-        # --------------------------
-        # Cumulative returns + Underwater
-        # --------------------------
+        # Cumulative Returns and Underwater plots
         html.Div([
-        dcc.Graph(
-            id='cumulative-returns-plot',
-            style={'width': '100%'}
-        ),
-        dcc.Graph(
-            id='underwater-plot',
-            style={'width': '100%'}
-        )
+            dcc.Graph(id='cumulative-returns-plot', style={'width': '100%'}),
+            dcc.Graph(id='underwater-plot', style={'width': '100%'})
         ]),
 
         html.Hr(),
 
-        # --------------------------
-        # Performance table
-        # --------------------------
+    # Period Returns Table
         html.Div([
-            html.H3("Performance Table"),
             html.Div(id="date-range-label", style={"margin-bottom": "10px"}),
+            html.H3("Performance Over Periods"),
             dash_table.DataTable(
-                id='performance-table',
+                id='performance-period-table',
+                columns=[
+                    {"name": "Strategy", "id": "Strategy"}]
+                    +
+                    [{"name": p, "id": p, "type": "numeric", "format": Format(scheme=Scheme.percentage, precision=2)} for p in periods_columns],
+            
+                data=[],
+                style_table={'overflowX': 'auto'},
+                style_cell={'textAlign': 'center'},
+                style_data_conditional=[
+                    {'if': {'filter_query': '{WTD} >= 0', 'column_id': 'WTD'}, 'color': 'green'},
+                    {'if': {'filter_query': '{WTD} < 0', 'column_id': 'WTD'}, 'color': 'red'},
+                    {'if': {'filter_query': '{MTD} >= 0', 'column_id': 'MTD'}, 'color': 'green'},
+                    {'if': {'filter_query': '{MTD} < 0', 'column_id': 'MTD'}, 'color': 'red'},
+                    {'if': {'filter_query': '{YTD} >= 0', 'column_id': 'YTD'}, 'color': 'green'},
+                    {'if': {'filter_query': '{YTD} < 0', 'column_id': 'YTD'}, 'color': 'red'},
+                    {'if': {'filter_query': '{WTD} >= 0', 'column_id': 'WTD'}, 'color': 'green'},
+                    {'if': {'filter_query': '{WTD} < 0', 'column_id': 'WTD'}, 'color': 'red'},
+                    {'if': {'filter_query': '{MTD} >= 0', 'column_id': 'MTD'}, 'color': 'green'},
+                    {'if': {'filter_query': '{MTD} < 0', 'column_id': 'MTD'}, 'color': 'red'},
+                    {'if': {'filter_query': '{YTD} >= 0', 'column_id': 'YTD'}, 'color': 'green'},
+                    {'if': {'filter_query': '{YTD} < 0', 'column_id': 'YTD'}, 'color': 'red'},
+                    {'if': {'filter_query': '{ITD} >= 0', 'column_id': 'ITD'}, 'color': 'green'},
+                    {'if': {'filter_query': '{ITD} < 0', 'column_id': 'ITD'}, 'color': 'red'},
+                    {'if': {'filter_query': '{1M} >= 0', 'column_id': '1M'}, 'color': 'green'},
+                    {'if': {'filter_query': '{1M} < 0', 'column_id': '1M'}, 'color': 'red'},
+                    {'if': {'filter_query': '{3M} >= 0', 'column_id': '3M'}, 'color': 'green'},
+                    {'if': {'filter_query': '{3M} < 0', 'column_id': '3M'}, 'color': 'red'},
+                    {'if': {'filter_query': '{6M} >= 0', 'column_id': '6M'}, 'color': 'green'},
+                    {'if': {'filter_query': '{6M} < 0', 'column_id': '6M'}, 'color': 'red'},
+                    {'if': {'filter_query': '{1Y} >= 0', 'column_id': '1Y'}, 'color': 'green'},
+                    {'if': {'filter_query': '{1Y} < 0', 'column_id': '1Y'}, 'color': 'red'},
+
+                ]
+            )
+        ]),
+
+        # Metrics Table
+        html.Div([
+            html.H3("Performance/Risk Metrics"),
+            dash_table.DataTable(
+                id='performance-metrics-table',
                 columns=[
                     {"name": "Strategy", "id": "Strategy"},
-                    {"name": "WTD", "id": "WTD"},
-                    {"name": "MTD", "id": "MTD"},
-                    {"name": "YTD", "id": "YTD"},
-                    {"name": "SINCE INCEPTION", "id": "SINCE INCEPTION"},
-                    {"name": "1M (Rolling)", "id": "1M"},
-                    {"name": "3M (Rolling)", "id": "3M"},
-                    {"name": "6M (Rolling)", "id": "6M"},
                     {"name": "Sharpe", "id": "Sharpe"},
                     {"name": "Sortino", "id": "Sortino"},
                     {"name": "Max DD", "id": "Max DD"},
                     {"name": "Avg Daily Return", "id": "Avg Daily Return"},
-                    {"name": "Hit Rate", "id": "Hit Rate"},
+                    {"name": "Hit Rate", "id": "Hit Rate"}
                 ],
-                data=[],  # updated by callback
+                data=[],
                 style_table={'overflowX': 'auto'},
+                style_cell={'textAlign': 'center'},
+                style_header={'backgroundColor': 'lightgrey', 'fontWeight': 'bold'}
             )
         ]),
 
         html.Hr(),
-
-        # --------------------------
-        # HEATMAPS (separate dropdown so it doesn't interfere)
-        # --------------------------
+        # Dropdown for tables
         html.Div([
-            html.Label("Select Strategies (Heatmaps):"),
+            html.Label("Select Strategies for Monthly and Weekly Tables:"),
             dcc.Dropdown(
-                id='heatmap-strategy-dropdown',
+                id='table-strategy-dropdown',
                 options=[{'label': s, 'value': s} for s in df.columns],
-                value=list(df.columns),  # default: all
+                value=list(table_columns),
                 multi=True
             )
         ], style={'width': '400px', 'margin-bottom': '20px'}),
 
-        html.Div([
-            dcc.Graph(id='monthly-heatmap'),
-            dcc.Graph(id='weekly-heatmap')
-        ])
+        html.H3("Monthly Performance for Each Strategy"),
+        html.Div(id='monthly-tables-container'),
+
+        html.Hr(),
+
+        html.H3("Weekly Performance (Last 15 Weeks)"),
+        dash_table.DataTable(
+            id='weekly-performance-table',
+            columns=[],  # will be set dynamically
+            data=[],     # will be set dynamically
+            style_table={'overflowX': 'auto'},
+            style_cell={'textAlign': 'center', 'padding': '5px'},
+            style_data_conditional=[]
+        )
     ])
 
-    # ------------------------------------------------------------------------------
-    # CALLBACK: LINE PLOTS + TABLE
-    # ------------------------------------------------------------------------------
+    # (Helper functions: compute_cumulative_returns, compute_drawdown, annualized_sharpe_ratio, 
+    #  annualized_sortino_ratio, max_drawdown, average_daily_return, hit_rate, 
+    #  period_performance, get_period_slice, compute_performance_table are assumed to be defined above.)
+
+
     @app.callback(
-        [
-            Output('cumulative-returns-plot', 'figure'),
-            Output('underwater-plot', 'figure'),
-            Output('performance-table', 'data'),
-            Output('date-range-label', 'children')  # new output
-        ],
-        [
-            Input('date-picker-range', 'start_date'),
-            Input('date-picker-range', 'end_date'),
-            Input('strategy-dropdown', 'value')
-        ]
+        [Output('weekly-performance-table', 'columns'),
+        Output('weekly-performance-table', 'data'),
+        Output('weekly-performance-table', 'style_data_conditional')],
+        [Input('date-picker-range', 'start_date'),
+        Input('date-picker-range', 'end_date'),
+        Input('table-strategy-dropdown', 'value')]
     )
+    def update_weekly_performance_table(start_date, end_date, selected_strategies):
+        if not selected_strategies or not start_date or not end_date:
+            return [], [], []
+
+        # Convert input dates to Timestamps
+        start_date = pd.to_datetime(start_date)
+        end_date = pd.to_datetime(end_date)
+
+        # Filter DataFrame based on date range and selected strategies
+        df_filtered = df.loc[(df.index >= start_date) & (df.index <= end_date), selected_strategies]
+
+        # Resample to weekly returns on Mondays
+        weekly_returns = (1 + df_filtered).resample('W-MON').prod() - 1
+
+        # Select the last 20 weeks
+        last_15_weeks = weekly_returns.tail(15)
+
+        # Transpose so rows are strategies, columns are weeks (Monday dates)
+        transposed = last_15_weeks.transpose()
+
+        # Format week start dates for column headers
+        week_columns = [col.strftime('%Y-%m-%d') for col in last_15_weeks.index]
+
+        # Prepare multi-index headers
+        columns = [{"name": "Strategy", "id": "Strategy"}]
+        week_ids = []  # to store unique column IDs
+        for date in last_15_weeks.index:
+            year = date.year
+            month = month_names[date.month]
+            # Count how many Mondays in the same month and year occurred up to this date in the dataset
+            same_month_weeks = [d for d in last_15_weeks.index if d.year == year and d.month == date.month and d <= date]
+            week_of_month = len(same_month_weeks)  # ordinal week in this month
+            header = [str(year), month, f"Week {week_of_month}"]
+            col_id = str(date)  # Use the date string as a unique column ID
+            week_ids.append(col_id)
+
+            columns.append({
+                "name": header,
+                "id": col_id,
+                "type": "numeric",
+                "format": Format(scheme=Scheme.percentage, precision=2)
+            })
+
+        # Prepare data for the table
+        data = []
+        for strat in transposed.index:
+            row = {"Strategy": strat}
+            for col_id, value in zip(week_ids, transposed.loc[strat].values):
+                row[col_id] = value
+            data.append(row)
+
+        # Conditional styling: color text based on sign of returns
+        style_data_conditional = []
+        for col_id in week_ids:
+            style_data_conditional += [
+                {
+                    'if': {
+                        'filter_query': f'{{{col_id}}} >= 0',
+                        'column_id': col_id
+                    },
+                    'color': 'green'
+                },
+                {
+                    'if': {
+                        'filter_query': f'{{{col_id}}} < 0',
+                        'column_id': col_id
+                    },
+                    'color': 'red'
+                }
+            ]
+
+        return columns, data, style_data_conditional
+
+    @app.callback(
+        [Output('cumulative-returns-plot', 'figure'),
+        Output('underwater-plot', 'figure'),
+        Output('performance-period-table', 'data'),
+        Output('performance-metrics-table', 'data'),
+        Output('date-range-label', 'children')],
+        [Input('date-picker-range', 'start_date'),
+        Input('date-picker-range', 'end_date'),
+        Input('strategy-dropdown', 'value')]
+    )
+
     def update_dashboard(start_date, end_date, selected_strategies):
         """
         Updates:
@@ -279,8 +397,7 @@ def Dashboard(df: pd.DataFrame, start_date: str = None):
 
         if df_filtered.empty:
             empty_fig = go.Figure(data=[])
-            return empty_fig, empty_fig, [], f"Start: {start_date.date()}, End: {end_date.date()} (No Data)"
-
+            return empty_fig, empty_fig, []
 
         # 1) Cumulative Returns (multi-line)
         cum_returns_fig = go.Figure()
@@ -291,11 +408,12 @@ def Dashboard(df: pd.DataFrame, start_date: str = None):
                 x=cum_ret.index,
                 y=cum_ret,
                 mode='lines',
-                name=strat
+                name=strat,
+                line=dict(width=1) 
             ))
         cum_returns_fig.update_layout(
             title="Cumulative Returns",
-            xaxis_title=None,
+            xaxis_title="Date",
             yaxis_title="Cumulative Return",
             yaxis_tickformat=".2%",
             hovermode='x unified'
@@ -311,200 +429,133 @@ def Dashboard(df: pd.DataFrame, start_date: str = None):
                 x=dd.index,
                 y=dd,
                 mode='lines',
-                name=strat
+                name=strat,
+                line=dict(width=1) 
             ))
         underwater_fig.update_layout(
             title="Underwater Plot (Drawdown)",
-            xaxis_title=None,
+            xaxis_title="Date",
             yaxis_title="Drawdown",
             yaxis_tickformat=".2%",
-            hovermode='x unified'
+            hovermode='x unified',
+
         )
 
-        # 3) Performance Table
-        table_data = compute_performance_table(df_filtered, start_date, end_date)
+        # Compute full performance table data
+        table_data = compute_performance_table(df, start_date, end_date)
+
+    
+        for row in table_data:
+            for col in periods_columns:
+                val = row.get(col, "")
+                try:
+                    row[col] = float(val.strip('%'))/100 if isinstance(val, str) else val
+                except:
+                    row[col] = None
+
+        # Separate data for period and metrics tables
+        metrics_cols = {"Strategy", "Sharpe", "Sortino", "Max DD", "Avg Daily Return", "Hit Rate"}
+        period_data = []
+        metrics_data = []
+        for row in table_data:
+            period_row = {k: row.get(k, None) for k in ["Strategy"] + periods_columns}
+            metrics_row = {k: row.get(k, "") for k in metrics_cols}
+            period_data.append(period_row)
+            metrics_data.append(metrics_row)
+        
+        
+        # 4) Prepare the date-range text
         date_text = f"Start: {start_date.date()}  |  End: {end_date.date()}"
 
-        return cum_returns_fig, underwater_fig, table_data, date_text
+        return cum_returns_fig, underwater_fig, period_data, metrics_data, date_text
 
-    # ------------------------------------------------------------------------------
-    # CALLBACK: HEATMAPS (MONTHLY & WEEKLY)
-    # ------------------------------------------------------------------------------
     @app.callback(
-        [
-            Output('monthly-heatmap', 'figure'),
-            Output('weekly-heatmap', 'figure')
-        ],
-        [Input('heatmap-strategy-dropdown', 'value'),
-        Input('date-picker-range', 'start_date'),
-        Input('date-picker-range', 'end_date')]
+        Output('monthly-tables-container', 'children'),
+        [Input('date-picker-range', 'start_date'),
+        Input('date-picker-range', 'end_date'),
+        Input('table-strategy-dropdown', 'value')]
     )
-    def update_heatmaps(selected_heatmap_strategies, start_date, end_date):
-        """
-        Creates:
-        - A multi-subplot monthly heatmap
-        - A multi-subplot weekly heatmap
-        for the chosen strategies. (Uses entire df, ignoring the date range.)
-        """
-        if not selected_heatmap_strategies:
-            empty_fig = go.Figure()
-            return empty_fig, empty_fig
+    def update_monthly_tables(start_date, end_date, selected_strategies):
+        if not selected_strategies:
+            return []
 
-        # ---------- MONTHLY HEATMAP -----------
-        # Resample to monthly returns
-        monthly_returns = (1 + df[(df.index >= start_date) & (df.index <= end_date)]).resample('M').prod() - 1
-        # We'll create a separate subplot for each strategy
-        rows_m = len(selected_heatmap_strategies)
-        fig_monthly = make_subplots(
-            rows=rows_m, cols=1,
-            subplot_titles=[f"{s}" for s in selected_heatmap_strategies],
-            vertical_spacing=0.1
-        )
+        start_date = pd.to_datetime(start_date)
+        end_date = pd.to_datetime(end_date)
+        tables = []
 
-        for i, strat in enumerate(selected_heatmap_strategies):
-            # Extract that strategy's monthly
-            strat_monthly = monthly_returns[[strat]].copy()
-            if strat_monthly.empty:
-                continue
+        for strat in selected_strategies:
+            filtered_df = df[(df.index >= start_date) & (df.index <= end_date)][[strat]]
+            monthly_returns = (1 + filtered_df).resample('M').prod() - 1
+            monthly_returns['Year'] = monthly_returns.index.year
+            monthly_returns['Month'] = monthly_returns.index.month
 
-            # Add year & month columns for pivoting
-            strat_monthly['Year'] = strat_monthly.index.year
-            strat_monthly['Month'] = strat_monthly.index.month
+            pivot = monthly_returns.pivot(index='Year', columns='Month', values=strat)
+            pivot = pivot.sort_index(ascending=False)
 
-            # Pivot: rows=Year, cols=Month, values=returns
-            pivot = strat_monthly.pivot(index='Year', columns='Month', values=strat)
-            pivot = pivot.sort_index(ascending=False)  # so most recent year at top (optional)
-            # 1) Figure out the *full* year range present in your data
-            all_years = range(pivot.index.min(), pivot.index.max() + 1)
-
-            # 2) Weeks from 1..52 (or 1..53 if you want to include all possible ISO weeks)
+            all_years = range(pivot.index.min(), pivot.index.max() + 1) if not pivot.empty else []
             all_months = range(1, 13)
+            pivot = pivot.reindex(index=all_years, columns=all_months, fill_value=np.nan)
 
-            # 3) Reindex pivot
-            pivot = pivot.reindex(
-                index=all_years,    # ensures each year row is present
-                columns=all_months,  # ensures each week column is present
-                fill_value=np.nan
+            pivot.rename(columns=month_names, inplace=True)
+            pivot.reset_index(inplace=True)
+
+            columns = []
+            for col in pivot.columns:
+                if col == 'Year':
+                    columns.append({"name": col, "id": col})
+                else:
+                    columns.append({
+                        "name": col,
+                        "id": col,
+                        "type": "numeric",
+                        "format": Format(scheme=Scheme.percentage, precision=1)
+                    })
+            data = pivot.to_dict('records')
+
+            style_data_conditional = []
+            for month in month_names.values():
+                style_data_conditional += [
+                    {
+                        'if': {
+                            'filter_query': f'{{{month}}} >= 0',
+                            'column_id': month
+                        },
+                        'color': 'green'
+                    },
+                    {
+                        'if': {
+                            'filter_query': f'{{{month}}} < 0',
+                            'column_id': month
+                        },
+                        'color': 'red'
+                    }
+                ]
+
+            table = dash_table.DataTable(
+                columns=columns,
+                data=data,
+                style_data_conditional=style_data_conditional,
+                style_table={'overflowX': 'auto', 'margin': '10px 0'},
+                style_cell={'textAlign': 'center', 'padding': '5px'},
+                style_header={'backgroundColor': 'lightgrey', 'fontWeight': 'bold'},
+                page_action='none'
             )
 
-            # We'll create a heatmap
-            heatmap = go.Heatmap(
-                x=pivot.columns,
-                y=[str(y) for y in pivot.index],
-                z=pivot.values ,
-                coloraxis="coloraxis",
-                hovertemplate="Year=%{y}<br>Month=%{x}<br>Return=%{z:.2%}<extra></extra>",
-                texttemplate="%{z:.1%}",
-                showscale=False
-                
-                
-            )
-            fig_monthly.add_trace(heatmap, row=i+1, col=1)
+            tables.append(html.H4(strat))
+            tables.append(table)
 
-            # Format axes
-            fig_monthly.update_xaxes(
-                tickmode='array',
-                tickvals=list(range(1,13)),
-                ticktext=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"],
-                title_text=None,
-                row=i+1, col=1,
-                
-                
-            )
-            fig_monthly.update_yaxes(title_text="Year", row=i+1, col=1)
-
-        fig_monthly.update_layout(
-            coloraxis=dict(
-            colorscale='RdYlGn',
-            cmin=-0.1,
-            cmax=0.1,
-            cmid=0,
-            showscale=False
-        ),
-            height=300*rows_m,  # scale figure height by number of subplots
-            title="Monthly Returns"
-        )
-
-        # ---------- WEEKLY HEATMAP -----------
-        # Resample to weekly returns
-        # We'll say 'W-MON' means each period ends on Monday
-        weekly_returns = (1 + df[(df.index >= start_date) & (df.index <= end_date)]).resample('W-MON').prod() - 1
-        weekly_returns.index = weekly_returns.index + pd.offsets.Day(6)
-        rows_w = len(selected_heatmap_strategies)
-        fig_weekly = make_subplots(
-            rows=rows_w, cols=1,
-            subplot_titles=[f"{s}" for s in selected_heatmap_strategies],
-            vertical_spacing=0.1
-        )
-
-        for i, strat in enumerate(selected_heatmap_strategies):
-            strat_weekly = weekly_returns[[strat]].copy()
-            if strat_weekly.empty:
-                continue
-
-            # Add Year & Week for pivoting
-            # isocalendar().week gives the ISO week number
-            strat_weekly['Year'] = strat_weekly.index.year
-            strat_weekly['Week'] = strat_weekly.index.isocalendar().week
-           
-
-            print(strat)
-
-            # Pivot: rows=Year, cols=Week
-            pivot = strat_weekly.pivot(index='Year', columns='Week', values=strat)
-            pivot = pivot.sort_index(ascending=False)  # so the latest year is on top
-
-                        # 1) Figure out the *full* year range present in your data
-            all_years = range(pivot.index.min(), pivot.index.max() + 1)
-
-            # 2) Weeks from 1..52 (or 1..53 if you want to include all possible ISO weeks)
-            all_weeks = range(1, 53)
-
-            # 3) Reindex pivot
-            pivot = pivot.reindex(
-                index=all_years,    # ensures each year row is present
-                columns=all_weeks,  # ensures each week column is present
-                fill_value=np.nan
-            )
-
-            heatmap = go.Heatmap(
-                x=pivot.columns,   # weeks of the year
-                y=[str(y) for y in pivot.index],     # year
-                z=pivot.values,
-                coloraxis="coloraxis",
-                hovertemplate="Year=%{y}<br>Week=%{x}<br>Return=%{z:.2%}<extra></extra>",
-                texttemplate="%{z:.1%}",
-                showscale=False
-            )
-            fig_weekly.add_trace(heatmap, row=i+1, col=1)
-
-            fig_weekly.update_xaxes(title_text=None, row=i+1, col=1)
-            fig_weekly.update_yaxes(title_text="Year", row=i+1, col=1)
-
-        fig_weekly.update_layout(
-            coloraxis=dict(
-            colorscale='RdYlGn',
-            cmin=-0.1,
-            cmax=0.1,
-            cmid=0,
-            showscale=False
-        ),
-            height=300*rows_w,
-            title="Weekly Returns"
-        )
-
-        return fig_monthly, fig_weekly
-
-
+        return tables
+    
     app.run_server(debug=True)
 
-# # Example: synthetic returns DataFrame
-# dates = pd.date_range("2024-10-01", periods=100, freq="B")
-# df = pd.DataFrame(
-#     np.random.normal(0.001, 0.01, size=(100, 2)),
-#     index=dates,
-#     columns=["Strategy_X", "Strategy_Y"]
-# )
 
-# # Launch the Dash app
-# Dashboard(df)  # By default, runs on http://127.0.0.1:8050
+
+
+# # Sample DataFrame generation for demonstration
+# dates = pd.date_range("2024-07-01", periods=500, freq="B")
+# np.random.seed(42)
+# df = pd.DataFrame(np.random.normal(0.001, 0.02, size=(500, 3)), 
+#                   index=dates, 
+#                   columns=["Strategy_A", "Strategy_B", "Strategy_C"])
+
+# Dashboard(df, plot_columns=["Strategy_A"])
