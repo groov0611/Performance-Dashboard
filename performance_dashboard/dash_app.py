@@ -51,7 +51,7 @@ def average_daily_return(returns_series: pd.Series) -> float:
 
 def hit_rate(returns_series: pd.Series) -> float:
     """Fraction of days with returns >= 0 (counting zero as positive)."""
-    return (returns_series >= 0).mean()
+    return (returns_series[returns_series!=0] >= 0).mean()
 
 def period_performance(returns_series: pd.Series) -> float:
     """(1 + r_1)*(1 + r_2)*...*(1 + r_n) - 1 over the given period."""
