@@ -163,8 +163,8 @@ def Dashboard(df, start_date : str = None, end_date: str = None, plot_columns = 
             html.Label("Select Date Range:"),
             dcc.DatePickerRange(
                 id='date-picker-range',
-                start_date=df.index.min().date(),
-                end_date=df.index.max().date(),
+                start_date=start_date,
+                end_date=end_date,
                 display_format='YYYY-MM-DD'
             )
         ], style={'margin-bottom': '20px'}),
@@ -492,7 +492,7 @@ def Dashboard(df, start_date : str = None, end_date: str = None, plot_columns = 
             pivot = monthly_returns.pivot(index='Year', columns='Month', values=strat)
             pivot = pivot.sort_index(ascending=False)
 
-            all_years = range(pivot.index.min(), pivot.index.max() + 1) if not pivot.empty else []
+            all_years = reversed(range(pivot.index.min(), pivot.index.max() + 1)) if not pivot.empty else []
             all_months = range(1, 13)
             pivot = pivot.reindex(index=all_years, columns=all_months, fill_value=np.nan)
 
