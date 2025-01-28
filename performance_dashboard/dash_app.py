@@ -442,7 +442,8 @@ def Dashboard(df, start_date : str = None, end_date: str = None, plot_columns = 
         )
 
         # Compute full performance table data
-        table_data = compute_performance_table(df_filtered, start_date, end_date)
+        table_data = compute_performance_table(df.loc[(df.index >= start_date) & 
+                                    (df.index <= end_date)], start_date, end_date)
 
     
         for row in table_data:
