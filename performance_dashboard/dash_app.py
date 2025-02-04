@@ -156,8 +156,7 @@ def Dashboard(df, start_date : str = None, end_date: str = None, plot_columns = 
     app = dash.Dash(__name__)
 
     app.layout = html.Div([
-        html.H2("Strategy Performance Dashboard"),
-
+       
         # Date Range Picker
         html.Div([
             html.Label("Select Date Range:"),
