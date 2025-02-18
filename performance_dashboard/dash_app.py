@@ -302,7 +302,7 @@ def Dashboard(df, start_date : str = None, end_date: str = None, plot_columns = 
         df_filtered = df.loc[(df.index >= start_date) & (df.index <= end_date), selected_strategies]
 
         # Resample to weekly returns on Mondays
-        weekly_returns = (1 + df_filtered).resample('W-MON').prod() - 1
+        weekly_returns = (1 + df_filtered).resample('W-FRI').prod() - 1
 
         # Select the last 20 weeks
         last_15_weeks = weekly_returns.tail(15)
