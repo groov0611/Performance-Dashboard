@@ -484,21 +484,35 @@ def Dashboard(df, start_date : str = None, end_date: str = None, plot_columns = 
         tables = []
 
         for strat in selected_strategies:
+                        # Filter data and compute monthly returns
             filtered_df = df[(df.index >= start_date) & (df.index <= end_date)][[strat]]
             monthly_returns = (1 + filtered_df).resample('M').prod() - 1
             monthly_returns['Year'] = monthly_returns.index.year
             monthly_returns['Month'] = monthly_returns.index.month
 
+            # Pivot the table so that each year is a row and months (1-12) are columns
             pivot = monthly_returns.pivot(index='Year', columns='Month', values=strat)
             pivot = pivot.sort_index(ascending=False)
 
+            # Compute YTD performance:
+            # First, reindex to ensure all months from 1 to 12 exist, fill missing months with 0 (0% return)
+            pivot_months = pivot.reindex(columns=range(1, 13), fill_value=0)
+            # Calculate YTD as the cumulative product over the months minus 1
+            pivot['Y'] = (pivot_months + 1).prod(axis=1) - 1
+
+            # Define column order with YTD at the right
+            all_months = list(range(1, 13)) + ["Y"]
+            # Ensure the index covers the full range of years
             all_years = reversed(range(pivot.index.min(), pivot.index.max() + 1)) if not pivot.empty else []
-            all_months = range(1, 13)
             pivot = pivot.reindex(index=all_years, columns=all_months, fill_value=np.nan)
 
-            pivot.rename(columns=month_names, inplace=True)
+            # Rename month columns using your month_names mapping (YTD remains unchanged)
+            renamed_columns = {m: month_names.get(m, m) for m in range(1, 13)}
+            renamed_columns["Y"] = "Y"
+            pivot.rename(columns=renamed_columns, inplace=True)
             pivot.reset_index(inplace=True)
 
+            # Build columns configuration for your table component
             columns = []
             for col in pivot.columns:
                 if col == 'Year':
@@ -510,8 +524,11 @@ def Dashboard(df, start_date : str = None, end_date: str = None, plot_columns = 
                         "type": "numeric",
                         "format": Format(scheme=Scheme.percentage, precision=1)
                     })
+
+            # Convert pivot table to dictionary format for your table
             data = pivot.to_dict('records')
 
+            # Conditional styling based on performance (green for >=0 and red for <0)
             style_data_conditional = []
             for month in month_names.values():
                 style_data_conditional += [
@@ -530,6 +547,23 @@ def Dashboard(df, start_date : str = None, end_date: str = None, plot_columns = 
                         'color': 'red'
                     }
                 ]
+            # Optionally add styling for the YTD column if needed:
+            style_data_conditional += [
+                {
+                    'if': {
+                        'filter_query': '{Y} >= 0',
+                        'column_id': 'Y'
+                    },
+                    'color': 'green'
+                },
+                {
+                    'if': {
+                        'filter_query': '{Y} < 0',
+                        'column_id': 'Y'
+                    },
+                    'color': 'red'
+                }
+            ]
 
             table = dash_table.DataTable(
                 columns=columns,
@@ -551,11 +585,11 @@ def Dashboard(df, start_date : str = None, end_date: str = None, plot_columns = 
 
 
 
-# # Sample DataFrame generation for demonstration
-# dates = pd.date_range("2024-07-01", periods=500, freq="B")
-# np.random.seed(42)
-# df = pd.DataFrame(np.random.normal(0.001, 0.02, size=(500, 3)), 
-#                   index=dates, 
-#                   columns=["Strategy_A", "Strategy_B", "Strategy_C"])
+# Sample DataFrame generation for demonstration
+dates = pd.date_range("2024-07-01", periods=500, freq="B")
+np.random.seed(42)
+df = pd.DataFrame(np.random.normal(0.001, 0.02, size=(500, 3)), 
+                  index=dates, 
+                  columns=["Strategy_A", "Strategy_B", "Strategy_C"])
 
-# Dashboard(df, plot_columns=["Strategy_A"])
+Dashboard(df, plot_columns=["Strategy_A"])
