@@ -583,13 +583,3 @@ def Dashboard(df, start_date : str = None, end_date: str = None, plot_columns = 
     app.run_server(debug=True)
 
 
-
-
-# Sample DataFrame generation for demonstration
-dates = pd.date_range("2024-07-01", periods=500, freq="B")
-np.random.seed(42)
-df = pd.DataFrame(np.random.normal(0.001, 0.02, size=(500, 3)), 
-                  index=dates, 
-                  columns=["Strategy_A", "Strategy_B", "Strategy_C"])
-
-Dashboard(df, plot_columns=["Strategy_A"])
