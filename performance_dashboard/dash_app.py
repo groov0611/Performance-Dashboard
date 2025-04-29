@@ -580,6 +580,6 @@ def Dashboard(df, start_date : str = None, end_date: str = None, plot_columns = 
 
         return tables
     
-    app.run_server(debug=True)
+    app.run_server(debug=True, jupyter_height=6000)
 
 
